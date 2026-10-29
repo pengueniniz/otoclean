@@ -3,7 +3,7 @@ import os
 import pytest
 from PySide6.QtCore import Qt
 
-from otoclean.core.models import DirStat, Finding, RiskLevel, ScanResult
+from otoclean.core.models import DirStat, Finding, RiskLevel, ScanResult, human_size
 from otoclean.core.rules.catalog import LOCATION_RULES, OLD_DOWNLOADS, PROTECTED, _cache
 from otoclean.gui.findings_view import COL_NAME, FindingsTree, default_checked
 from otoclean.gui.treemap import TreemapWidget, squarify
@@ -133,6 +133,28 @@ def test_main_window_filter_toggle(window):
     assert window._risk_filter is RiskLevel.REVIEW
     window._toggle_filter(RiskLevel.REVIEW)
     assert window._risk_filter is None
+
+
+@pytest.mark.parametrize("level", [RiskLevel.SAFE, RiskLevel.REVIEW, RiskLevel.DANGER])
+def test_risk_tile_opens_filtered_findings_after_deep_scan(window, qtbot, level):
+    window._on_deep_done((ScanResult(root="C:\\", total_size=2149), [
+        Finding("C:\\cache", 100, SAFE_CAT, is_dir=True),
+        Finding("C:\\old.zip", 50, OLD_DOWNLOADS),
+        Finding("C:\\pagefile.sys", 1999, PROTECTED),
+    ]))
+    assert window.tabs.currentIndex() == 1
+
+    qtbot.mouseClick(window.tiles[level], Qt.LeftButton)
+
+    assert window.tabs.currentWidget() is window.findings_stack
+    assert window._risk_filter is level
+    assert window.tiles[RiskLevel.SAFE].amount.text() == "100 B"
+    assert window.tiles[RiskLevel.DANGER].amount.text() == human_size(1999)
+    assert [window.tree.topLevelItem(i).isHidden() for i in range(3)] == [
+        risk is not level for risk in RiskLevel
+    ]
+    window.tree.set_all_checked(RiskLevel.DANGER, True)
+    assert all(f.risk is not RiskLevel.DANGER for f in window.tree.checked_findings())
 
 
 def test_unscanned_state_shows_empty_page_and_dashes(window):
