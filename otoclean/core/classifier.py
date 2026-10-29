@@ -18,7 +18,7 @@ from .detectors.duplicates import find_duplicates
 from .detectors.large_old import find_large_old
 from .detectors.stale_projects import find_stale_artifacts
 from .models import Category, Finding, RiskLevel, ScanResult
-from .protected import ProtectionPolicy, default_policy, norm
+from .protected import ProtectionPolicy, default_policy, is_within, norm
 from .rules.catalog import LOCATION_RULES, LocationRule
 from .scanner import folder_stats, scan_tree
 
@@ -102,17 +102,21 @@ def _recycle_bin_finding(category: Category) -> Finding | None:
 
 
 def evaluate_location_rules(rules: Iterable[LocationRule], *,
+                            root: str | None = None,
                             cancel: threading.Event | None = None,
                             status: StatusFn | None = None) -> list[Finding]:
     findings: list[Finding] = []
     tasks: list[tuple[str, Category]] = []
     for rule in rules:
         if rule.category.special == "recycle_bin":
+            if root is not None:
+                continue  # API tüm sürücülerin toplamını döndürür.
             found = _recycle_bin_finding(rule.category)
             if found:
                 findings.append(found)
             continue
-        tasks += [(path, rule.category) for t in rule.paths for path in expand(t)]
+        tasks += [(path, rule.category) for t in rule.paths for path in expand(t)
+                  if root is None or is_within(path, root)]
 
     def measure(task: tuple[str, Category]) -> Finding | None:
         if cancel is not None and cancel.is_set():
@@ -190,10 +194,11 @@ def quick_scan(*, policy: ProtectionPolicy | None = None,
 
 
 def deep_scan(root: str, *, policy: ProtectionPolicy | None = None,
+              rules: Iterable[LocationRule] = LOCATION_RULES,
               cancel: threading.Event | None = None,
               progress: Callable[[int, int, str], None] | None = None,
               status: StatusFn | None = None) -> tuple[ScanResult, list[Finding]]:
-    """Bir sürücünün tamamını tarar: büyük klasörler, büyük-eski dosyalar, kopyalar."""
+    """Seçili kökte bilinen konumları, büyük-eski dosyaları ve kopyaları tarar."""
     policy = policy or default_policy()
     if status:
         status(f"{root} taranıyor")
@@ -201,6 +206,11 @@ def deep_scan(root: str, *, policy: ProtectionPolicy | None = None,
                        large_threshold=DEEP_SCAN_FILE_THRESHOLD)
     if result.cancelled:
         return result, []
+    if status:
+        status("Bilinen önbellekler ve korumalı konumlar taranıyor")
+    findings = evaluate_location_rules(rules, root=root, cancel=cancel, status=status)
+    if cancel is not None and cancel.is_set():
+        return replace(result, cancelled=True), []
     if status:
         status("Kopya dosyalar karşılaştırılıyor")
 
@@ -210,13 +220,15 @@ def deep_scan(root: str, *, policy: ProtectionPolicy | None = None,
 
     user_files = [f for f in result.large_files if is_user_content(f[0], root)]
     originals: set[str] = set()
-    findings = find_duplicates(user_files, policy, min_size=DEEP_SCAN_FILE_THRESHOLD,
+    findings += find_duplicates(user_files, policy, min_size=DEEP_SCAN_FILE_THRESHOLD,
                                cancel=cancel, progress=dup_progress, originals_out=originals)
     # Bir kopya grubunun asıl dosyası "büyük-eski" olarak önerilmez; yoksa kullanıcı
     # hem kopyaları hem aslını seçip verinin tamamını silebilir.
     kept_originals = {norm(p) for p in originals}
     findings += [f for f in find_large_old(user_files, policy, min_size=LARGE_OLD_MIN_SIZE)
                  if norm(f.path) not in kept_originals]
+    if cancel is not None and cancel.is_set():
+        return replace(result, cancelled=True), []
     return result, dedupe(apply_protection(findings, policy))
 
 

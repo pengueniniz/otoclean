@@ -460,6 +460,7 @@ class MainWindow(QMainWindow):
         for lv, tile in self.tiles.items():
             tile.set_active(lv is self._risk_filter)
         self.tree.set_risk_filter(self._risk_filter)
+        self.tabs.setCurrentWidget(self.findings_stack)
 
     def _update_totals(self) -> None:
         all_f = self.tree.all_findings()
