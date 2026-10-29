@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+release/
+.pytest_cache/
+.coverage
+htmlcov/
+*.zip
+otoclean-ekran.png
