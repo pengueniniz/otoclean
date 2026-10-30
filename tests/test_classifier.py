@@ -186,3 +186,42 @@ def test_summarize():
     fs = [Finding("a", 5, OLD_DOWNLOADS), Finding("b", 7, _cache("s", "S").category)]
     totals = classifier.summarize(fs)
     assert totals[RiskLevel.REVIEW] == 5 and totals[RiskLevel.SAFE] == 7
+
+
+def test_deep_scan_includes_safe_and_danger_only_within_root(tmp_path, policy):
+    from otoclean.core.rules.catalog import PROTECTED
+
+    root = tmp_path / "drive"
+    cache = make_file(root / "cache" / "small.bin", 12)
+    protected = make_file(root / "pagefile.sys", 24)
+    outside = make_file(tmp_path / "drive-other" / "cache" / "outside.bin", 48)
+    rules = [
+        _cache("cache", "Cache", str(cache.parent), str(outside.parent)),
+        LocationRule(PROTECTED, (str(protected),)),
+        next(r for r in LOCATION_RULES if r.category.special == "recycle_bin"),
+    ]
+
+    result, found = classifier.deep_scan(str(root), policy=policy, rules=rules)
+
+    assert result.total_files == 2
+    assert [(f.path, f.risk, f.size) for f in found] == [
+        (str(cache.parent), RiskLevel.SAFE, 12),
+        (str(protected), RiskLevel.DANGER, 24),
+    ]
+
+
+def test_deep_scan_cancel_during_location_rules(tmp_path, policy):
+    import threading
+
+    cancel = threading.Event()
+    cache = make_file(tmp_path / "cache" / "small.bin", 12)
+    rule = _cache("cache", "Cancel here", str(cache.parent))
+
+    def status(message):
+        if message == "Cancel here":
+            cancel.set()
+
+    result, found = classifier.deep_scan(str(tmp_path), policy=policy, rules=[rule],
+                                         cancel=cancel, status=status)
+    assert result.cancelled
+    assert found == []
